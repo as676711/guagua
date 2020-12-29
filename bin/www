@@ -1,0 +1,212 @@
+#!/usr/bin/env node
+
+/**
+ * Module dependencies.
+ */
+
+const app = require('../app.js').https;
+const httpRedir = require('../app.js').http;
+const debug = require('debug')('webrtc-live-streaming:server');
+const https = require('https');
+const http  = require('http');
+const socketio = require('socket.io');
+// file system for reading ssl keys
+const fs = require('fs');
+const options = {
+  key:fs.readFileSync('./ssl_keys/private.key', 'utf8'),
+  cert: fs.readFileSync('./ssl_keys/certificate.crt', 'utf8')
+};
+const formatMessage = require('../utils/messages')
+const { userJoin, getCurrentUser, userLeave, getRoomUsers } = require('../utils/users')
+const { PeerServer } = require('peer');
+
+/**
+* Creat peer server
+*/
+
+const peerServer = PeerServer({
+    port: 3001, 
+    path: '/peerjs',
+    ssl: {
+        key: options.key,
+        cert: options.cert
+    }
+});
+
+/**
+ * Get port from environment and store in Express.
+ */
+
+var port = normalizePort(process.env.PORT || '443');
+var http_port = normalizePort(process.env.PORT || '80');
+app.set('port', port);
+httpRedir.set('port', http_port);
+
+/**
+ * Create HTTP server.
+ */
+
+var server = https.createServer(options, app);
+var http_server = http.createServer(httpRedir);
+
+/**
+ * Create Socket.io.
+ */
+
+const io = socketio(server);
+
+/**
+ * Run when client connects
+ */
+const botName = 'Chat Bot';
+
+io.on('connection', socket => {
+  // Debugging: log on the server side
+  // console.log('New Websocket Connection...');
+
+  // Listen on username and room of new participants
+  socket.on('joinRoom', ({ username, room }, userId) => {
+    const user = userJoin(socket.id, username, room);
+    // Debugging: log on the server side
+    console.log('Connected: ' + userId + ' | Room: ' + room + ' | User: ' + username);
+
+    socket.join(user.room);
+    
+    // Emit message to a single user(client) that connects
+    socket.emit(
+      'message', 
+      formatMessage(botName, 'Welcome FUCcapstone')
+    );
+
+    // Broadcast to all users when a new user connects(except the new one)
+    // use .to(user.room) to omit message to a specific room
+    socket.broadcast.to(user.room).emit(
+      'message', 
+      formatMessage(botName, `${user.username} 滑進摩鐵`)
+    );
+
+    // Experimental: Streaming, user join the room
+    socket.to(user.room).broadcast.emit(
+      'user-connected', userId
+    );
+
+    // Experimental: Streaming, user leave the room
+    socket.on('disconnect', () => {
+      socket.to(user.room).broadcast.emit(
+        'user-disconnected', userId
+      );
+      // Debugging: log on the server side
+      console.log('Disconnected: ' + userId + ' | Room: ' + room + ' | User: ' + username);
+    });
+
+    // Send users and room info(same as a user leave the room)
+    io.to(user.room).emit('roomUsers', {
+      room: user.room,
+      users: getRoomUsers(user.room)
+    });
+  });
+  
+  // Send message to all users
+  // io.emit();
+
+  // Listen on chat chatMessage(from client)
+  socket.on('chatMessage', msg => {
+    // Debugging: log on the server side
+    // console.log(msg);
+    const user = getCurrentUser(socket.id);
+
+    // emit message to all the users
+    io.to(user.room).emit(
+      'message', 
+      formatMessage(user.username, msg));
+  });
+
+  // Runs when client disconnects
+  socket.on('disconnect', ( userId ) => {
+    const user = userLeave(socket.id);
+
+    // Let everyone know a user has left
+    // `, the 'backtick' or 'backquote' which can used to interpolate any kind of expression in the template literals.
+    if(user) {
+      io.to(user.room).emit(
+        'message', 
+        formatMessage(botName, `${user.username} 滑出摩鐵`)
+      );
+
+      // Send users and room info(same as a join the room)
+      io.to(user.room).emit('roomUsers', {
+        room: user.room,
+        users: getRoomUsers(user.room)
+      });
+    };
+  });
+});
+
+/**
+ * Listen on provided port, on all network interfaces.
+ */
+
+server.listen(port);
+server.on('error', onError);
+server.on('listening', onListening);
+http_server.listen(http_port);        // listen on port 80 to redirect to https
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+  var port = parseInt(val, 10);
+
+  if (isNaN(port)) {
+    // named pipe
+    return val;
+  }
+
+  if (port >= 0) {
+    // port number
+    return port;
+  }
+
+  return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+
+function onError(error) {
+  if (error.syscall !== 'listen') {
+    throw error;
+  }
+
+  var bind = typeof port === 'string'
+    ? 'Pipe ' + port
+    : 'Port ' + port;
+
+  // handle specific listen errors with friendly messages
+  switch (error.code) {
+    case 'EACCES':
+      console.error(bind + ' requires elevated privileges');
+      process.exit(1);
+      break;
+    case 'EADDRINUSE':
+      console.error(bind + ' is already in use');
+      process.exit(1);
+      break;
+    default:
+      throw error;
+  }
+}
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+
+function onListening() {
+  var addr = server.address();
+  var bind = typeof addr === 'string'
+    ? 'pipe ' + addr
+    : 'port ' + addr.port;
+  debug('Listening on ' + bind);
+}
