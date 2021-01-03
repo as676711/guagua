@@ -205,3 +205,15 @@ video {
     max-height: 200px;
   }
 }
+
+.song{
+  position: fixed;
+  bottom:5px;
+  right: 10;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 10px;
+  max-height: 200px;
+  overflow-y: scroll;
+  color: #0080ff;
+}
